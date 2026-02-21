@@ -1,0 +1,11 @@
+services:
+  diaper-tracker:
+    build: .
+    ports:
+      - "8081:8080"
+    volumes:
+      - diaper-data:/data
+    restart: unless-stopped
+
+volumes:
+  diaper-data:

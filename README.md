@@ -1,17 +1,17 @@
-# Wet Diaper Tracker (local, mobile-first)
+# Breastfeeding Tracker (local, mobile-first)
 
 ## Run
 ```bash
 docker compose up --build
 ```
 
-Open: http://localhost:8080
+Open: http://localhost:8081
 
 ## Features
-- Log wet diaper events with start + end time
+- Log breastfeeding sessions with breast side (**L/R**) + start + end time
 - “Now” shortcuts
-- Last 7 days summary (count + total minutes)
-- Recent events list + delete
+- Last 7 days summary split by L/R (count + total minutes)
+- Recent feedings list + delete
 
 ## Data
 - SQLite stored in Docker volume `diaper-data`

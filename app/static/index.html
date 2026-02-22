@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Wet Diaper Tracker</title>
+  <title>Breastfeeding Tracker</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; color: #111; }
     h1 { font-size: 1.5rem; }
@@ -20,10 +20,17 @@
   </style>
 </head>
 <body>
-  <h1>Wet Diaper Tracker</h1>
+  <h1>Breastfeeding Tracker</h1>
 
   <div class="card">
-    <h2>Add Event</h2>
+    <h2>Add Feeding</h2>
+    <label>Breast</label>
+    <div class="row">
+      <button class="secondary" id="breastL" onclick="setBreast('L')">L</button>
+      <button class="secondary" id="breastR" onclick="setBreast('R')">R</button>
+    </div>
+    <div id="breastHint" class="muted" style="margin-top:6px;">Selected: <strong id="breastSelected">L</strong></div>
+
     <label>Start</label>
     <div class="row">
       <input type="datetime-local" id="start" />
@@ -48,7 +55,7 @@
   </div>
 
   <div class="card">
-    <h2>Recent Events</h2>
+    <h2>Recent Feedings</h2>
     <div id="events"></div>
   </div>
 
@@ -60,6 +67,16 @@
     document.getElementById(id).value = fmtLocal(new Date());
   }
 
+  let breast = 'L';
+
+  function setBreast(side) {
+    breast = side;
+    document.getElementById('breastSelected').textContent = side;
+    // lightweight visual state
+    document.getElementById('breastL').style.borderColor = (side === 'L') ? '#111' : '#e5e7eb';
+    document.getElementById('breastR').style.borderColor = (side === 'R') ? '#111' : '#e5e7eb';
+  }
+
   async function addEvent() {
     const start = document.getElementById('start').value;
     const end = document.getElementById('end').value;
@@ -69,14 +86,14 @@
       error.textContent = 'Start and end are required.';
       return;
     }
-    const res = await fetch('/api/events', {
+    const res = await fetch('/api/feeds', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start, end })
+      body: JSON.stringify({ breast, start, end })
     });
     if (!res.ok) {
       const data = await res.json();
-      error.textContent = data.detail || 'Error saving event.';
+      error.textContent = data.detail || 'Error saving feeding.';
       return;
     }
     document.getElementById('start').value = '';
@@ -85,7 +102,7 @@
   }
 
   async function deleteEvent(id) {
-    await fetch(`/api/events/${id}`, { method: 'DELETE' });
+    await fetch(`/api/feeds/${id}`, { method: 'DELETE' });
     await load();
   }
 
@@ -97,7 +114,7 @@
 
   async function load() {
     const [eventsRes, summaryRes] = await Promise.all([
-      fetch('/api/events?days=7'),
+      fetch('/api/feeds?days=7'),
       fetch('/api/summary?days=7')
     ]);
     const events = await eventsRes.json();
@@ -110,7 +127,7 @@
       div.className = 'event';
       div.innerHTML = `
         <div>
-          <div><strong>${new Date(ev.start).toLocaleString()}</strong> → ${new Date(ev.end).toLocaleString()}</div>
+          <div><strong>${ev.breast}</strong> · <strong>${new Date(ev.start).toLocaleString()}</strong> → ${new Date(ev.end).toLocaleString()}</div>
           <div class="muted">Duration: ${ev.duration_minutes} min</div>
         </div>
         <button class="secondary" onclick="deleteEvent(${ev.id})">Delete</button>
@@ -120,18 +137,28 @@
 
     const summaryEl = document.getElementById('summary');
     summaryEl.innerHTML = '';
+    // Summaries come back as (day, breast) tuples. Render as a 2-row block per day.
+    const byDay = {};
     summary.forEach(s => {
+      byDay[s.day] = byDay[s.day] || {};
+      byDay[s.day][s.breast] = s;
+    });
+
+    Object.keys(byDay).sort().reverse().forEach(day => {
+      const sL = byDay[day]['L'] || { count: 0, total_minutes: 0 };
+      const sR = byDay[day]['R'] || { count: 0, total_minutes: 0 };
       const div = document.createElement('div');
       div.className = 'card';
       div.innerHTML = `
-        <div><strong>${s.day}</strong></div>
-        <div class="muted">Count: ${s.count}</div>
-        <div class="muted">Total: ${s.total_minutes} min</div>
+        <div><strong>${day}</strong></div>
+        <div class="muted">L: ${sL.count} feeds · ${sL.total_minutes} min</div>
+        <div class="muted">R: ${sR.count} feeds · ${sR.total_minutes} min</div>
       `;
       summaryEl.appendChild(div);
     });
   }
 
+  setBreast('L');
   load();
 </script>
 </body>

@@ -12,16 +12,18 @@ from pydantic import BaseModel, Field
 
 DB_PATH = Path("/data/diaper.db")
 
-app = FastAPI(title="Wet Diaper Tracker")
+app = FastAPI(title="Breastfeeding Tracker")
 
 
-class EventIn(BaseModel):
+class FeedIn(BaseModel):
+    breast: str = Field(..., description="Breast side: 'L' or 'R'")
     start: str = Field(..., description="ISO 8601 datetime string")
     end: str = Field(..., description="ISO 8601 datetime string")
 
 
-class EventOut(BaseModel):
+class FeedOut(BaseModel):
     id: int
+    breast: str
     start: str
     end: str
     duration_minutes: int
@@ -29,6 +31,7 @@ class EventOut(BaseModel):
 
 class SummaryOut(BaseModel):
     day: str
+    breast: str
     count: int
     total_minutes: int
 
@@ -38,12 +41,16 @@ def init_db() -> None:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS events (
+            CREATE TABLE IF NOT EXISTS feedings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                breast TEXT NOT NULL,
                 start TEXT NOT NULL,
                 end TEXT NOT NULL
             )
             """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feedings_start ON feedings(start)"
         )
         conn.commit()
 
@@ -65,25 +72,38 @@ def index() -> str:
     return (Path(__file__).parent / "static" / "index.html").read_text()
 
 
-@app.get("/api/events", response_model=List[EventOut])
-def list_events(days: int = 7) -> List[EventOut]:
+def _normalize_breast(value: str) -> str:
+    v = (value or "").strip().upper()
+    if v not in {"L", "R"}:
+        raise HTTPException(status_code=400, detail="Breast must be 'L' or 'R'")
+    return v
+
+
+@app.get("/api/feeds", response_model=List[FeedOut])
+def list_feeds(days: int = 7) -> List[FeedOut]:
     cutoff = datetime.now() - timedelta(days=days)
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, start, end FROM events WHERE start >= ? ORDER BY start DESC",
+            "SELECT id, breast, start, end FROM feedings WHERE start >= ? ORDER BY start DESC",
             (cutoff.isoformat(timespec="minutes"),),
         ).fetchall()
 
-    events: List[EventOut] = []
+    feeds: List[FeedOut] = []
     for r in rows:
         start_dt = parse_dt(r["start"])
         end_dt = parse_dt(r["end"])
         duration = max(0, int((end_dt - start_dt).total_seconds() // 60))
-        events.append(
-            EventOut(id=r["id"], start=r["start"], end=r["end"], duration_minutes=duration)
+        feeds.append(
+            FeedOut(
+                id=r["id"],
+                breast=_normalize_breast(r["breast"]),
+                start=r["start"],
+                end=r["end"],
+                duration_minutes=duration,
+            )
         )
-    return events
+    return feeds
 
 
 @app.get("/api/summary", response_model=List[SummaryOut])
@@ -92,53 +112,70 @@ def summary(days: int = 7) -> List[SummaryOut]:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT start, end FROM events WHERE start >= ?",
+            "SELECT breast, start, end FROM feedings WHERE start >= ?",
             (cutoff.isoformat(),),
         ).fetchall()
 
-    buckets = {}
+    # Bucket by day + breast
+    buckets: dict[tuple[str, str], dict[str, int]] = {}
     for r in rows:
+        breast = _normalize_breast(r["breast"])
         start_dt = parse_dt(r["start"])
         end_dt = parse_dt(r["end"])
         day = start_dt.date().isoformat()
         duration = max(0, int((end_dt - start_dt).total_seconds() // 60))
-        if day not in buckets:
-            buckets[day] = {"count": 0, "total_minutes": 0}
-        buckets[day]["count"] += 1
-        buckets[day]["total_minutes"] += duration
+        key = (day, breast)
+        if key not in buckets:
+            buckets[key] = {"count": 0, "total_minutes": 0}
+        buckets[key]["count"] += 1
+        buckets[key]["total_minutes"] += duration
 
-    result = []
+    result: list[SummaryOut] = []
     for i in range(days):
         day = (datetime.now().date() - timedelta(days=i)).isoformat()
-        data = buckets.get(day, {"count": 0, "total_minutes": 0})
-        result.append(SummaryOut(day=day, count=data["count"], total_minutes=data["total_minutes"]))
+        for breast in ("L", "R"):
+            data = buckets.get((day, breast), {"count": 0, "total_minutes": 0})
+            result.append(
+                SummaryOut(day=day, breast=breast, count=data["count"], total_minutes=data["total_minutes"])
+            )
     return result
 
 
-@app.post("/api/events", response_model=EventOut)
-def create_event(event: EventIn) -> EventOut:
-    start_dt = parse_dt(event.start)
-    end_dt = parse_dt(event.end)
+@app.post("/api/feeds", response_model=FeedOut)
+def create_feed(feed: FeedIn) -> FeedOut:
+    breast = _normalize_breast(feed.breast)
+    start_dt = parse_dt(feed.start)
+    end_dt = parse_dt(feed.end)
     if end_dt < start_dt:
         raise HTTPException(status_code=400, detail="End time must be after start time")
 
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.execute(
-            "INSERT INTO events (start, end) VALUES (?, ?)",
-            (start_dt.isoformat(timespec="minutes"), end_dt.isoformat(timespec="minutes")),
+            "INSERT INTO feedings (breast, start, end) VALUES (?, ?, ?)",
+            (
+                breast,
+                start_dt.isoformat(timespec="minutes"),
+                end_dt.isoformat(timespec="minutes"),
+            ),
         )
         conn.commit()
-        event_id = cur.lastrowid
+        feed_id = cur.lastrowid
 
     duration = int((end_dt - start_dt).total_seconds() // 60)
-    return EventOut(id=event_id, start=start_dt.isoformat(timespec="minutes"), end=end_dt.isoformat(timespec="minutes"), duration_minutes=duration)
+    return FeedOut(
+        id=feed_id,
+        breast=breast,
+        start=start_dt.isoformat(timespec="minutes"),
+        end=end_dt.isoformat(timespec="minutes"),
+        duration_minutes=duration,
+    )
 
 
-@app.delete("/api/events/{event_id}")
-def delete_event(event_id: int) -> dict:
+@app.delete("/api/feeds/{feed_id}")
+def delete_feed(feed_id: int) -> dict:
     with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        cur = conn.execute("DELETE FROM feedings WHERE id = ?", (feed_id,))
         conn.commit()
     if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Event not found")
+        raise HTTPException(status_code=404, detail="Feed not found")
     return {"ok": True}

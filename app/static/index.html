@@ -50,13 +50,50 @@
   </div>
 
   <div class="card">
-    <h2>Last 7 Days Summary</h2>
+    <h2>Last 7 Days Feeding Summary</h2>
     <div id="summary" class="summary"></div>
   </div>
 
   <div class="card">
     <h2>Recent Feedings</h2>
     <div id="events"></div>
+  </div>
+
+  <div class="card">
+    <h2>Add Diaper (pee/poop)</h2>
+    <label>Type</label>
+    <div class="row">
+      <button class="secondary" id="kindPee" onclick="setDiaperKind('pee')">Pee</button>
+      <button class="secondary" id="kindPoop" onclick="setDiaperKind('poop')">Poop</button>
+    </div>
+    <div class="muted" style="margin-top:6px;">Selected: <strong id="kindSelected">pee</strong></div>
+
+    <label>Start</label>
+    <div class="row">
+      <input type="datetime-local" id="dstart" />
+      <button class="secondary" onclick="setNow('dstart')">Now</button>
+    </div>
+
+    <label>End</label>
+    <div class="row">
+      <input type="datetime-local" id="dend" />
+      <button class="secondary" onclick="setNow('dend')">Now</button>
+    </div>
+
+    <div style="margin-top:12px;">
+      <button onclick="addDiaper()">Save</button>
+    </div>
+    <div id="derror" class="muted" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>Last 7 Days Diaper Summary</h2>
+    <div id="dsummary" class="summary"></div>
+  </div>
+
+  <div class="card">
+    <h2>Recent Diapers</h2>
+    <div id="diapers"></div>
   </div>
 
 <script>
@@ -75,6 +112,15 @@
     // lightweight visual state
     document.getElementById('breastL').style.borderColor = (side === 'L') ? '#111' : '#e5e7eb';
     document.getElementById('breastR').style.borderColor = (side === 'R') ? '#111' : '#e5e7eb';
+  }
+
+  let diaperKind = 'pee';
+
+  function setDiaperKind(kind) {
+    diaperKind = kind;
+    document.getElementById('kindSelected').textContent = kind;
+    document.getElementById('kindPee').style.borderColor = (kind === 'pee') ? '#111' : '#e5e7eb';
+    document.getElementById('kindPoop').style.borderColor = (kind === 'poop') ? '#111' : '#e5e7eb';
   }
 
   async function addEvent() {
@@ -106,6 +152,35 @@
     await load();
   }
 
+  async function addDiaper() {
+    const start = document.getElementById('dstart').value;
+    const end = document.getElementById('dend').value;
+    const error = document.getElementById('derror');
+    error.textContent = '';
+    if (!start || !end) {
+      error.textContent = 'Start and end are required.';
+      return;
+    }
+    const res = await fetch('/api/diapers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: diaperKind, start, end })
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      error.textContent = data.detail || 'Error saving diaper event.';
+      return;
+    }
+    document.getElementById('dstart').value = '';
+    document.getElementById('dend').value = '';
+    await load();
+  }
+
+  async function deleteDiaper(id) {
+    await fetch(`/api/diapers/${id}`, { method: 'DELETE' });
+    await load();
+  }
+
   function durationMinutes(start, end) {
     const s = new Date(start);
     const e = new Date(end);
@@ -113,12 +188,16 @@
   }
 
   async function load() {
-    const [eventsRes, summaryRes] = await Promise.all([
+    const [eventsRes, summaryRes, diapersRes, diaperSummaryRes] = await Promise.all([
       fetch('/api/feeds?days=7'),
-      fetch('/api/summary?days=7')
+      fetch('/api/summary?days=7'),
+      fetch('/api/diapers?days=7'),
+      fetch('/api/diapers/summary?days=7')
     ]);
     const events = await eventsRes.json();
     const summary = await summaryRes.json();
+    const diapers = await diapersRes.json();
+    const diaperSummary = await diaperSummaryRes.json();
 
     const eventsEl = document.getElementById('events');
     eventsEl.innerHTML = '';
@@ -156,9 +235,46 @@
       `;
       summaryEl.appendChild(div);
     });
+
+    const diapersEl = document.getElementById('diapers');
+    diapersEl.innerHTML = '';
+    diapers.forEach(d => {
+      const div = document.createElement('div');
+      div.className = 'event';
+      div.innerHTML = `
+        <div>
+          <div><strong>${d.kind}</strong> · <strong>${new Date(d.start).toLocaleString()}</strong> → ${new Date(d.end).toLocaleString()}</div>
+          <div class="muted">Duration: ${d.duration_minutes} min</div>
+        </div>
+        <button class="secondary" onclick="deleteDiaper(${d.id})">Delete</button>
+      `;
+      diapersEl.appendChild(div);
+    });
+
+    const dsummaryEl = document.getElementById('dsummary');
+    dsummaryEl.innerHTML = '';
+    const dByDay = {};
+    diaperSummary.forEach(s => {
+      dByDay[s.day] = dByDay[s.day] || {};
+      dByDay[s.day][s.kind] = s;
+    });
+
+    Object.keys(dByDay).sort().reverse().forEach(day => {
+      const pee = dByDay[day]['pee'] || { count: 0, total_minutes: 0 };
+      const poop = dByDay[day]['poop'] || { count: 0, total_minutes: 0 };
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.innerHTML = `
+        <div><strong>${day}</strong></div>
+        <div class="muted">Pee: ${pee.count} · ${pee.total_minutes} min</div>
+        <div class="muted">Poop: ${poop.count} · ${poop.total_minutes} min</div>
+      `;
+      dsummaryEl.appendChild(div);
+    });
   }
 
   setBreast('L');
+  setDiaperKind('pee');
   load();
 </script>
 </body>

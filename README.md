@@ -14,7 +14,7 @@ Open: http://localhost:8081
 - Recent feedings list + delete
 
 ## Data
-- SQLite stored in Docker volume `diaper-data`
+- SQLite stored in Docker volume `feeding-data`
 
 ## Notes
 - No auth (local use)

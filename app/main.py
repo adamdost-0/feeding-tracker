@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-DB_PATH = Path("/data/diaper.db")
+DB_PATH = Path("/data/feeding.db")
 
 app = FastAPI(title="Breastfeeding Tracker")
 

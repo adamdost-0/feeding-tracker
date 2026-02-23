@@ -38,23 +38,19 @@ class SummaryOut(BaseModel):
 
 class DiaperIn(BaseModel):
     kind: str = Field(..., description="Diaper type: 'pee' or 'poop'")
-    start: str = Field(..., description="ISO 8601 datetime string")
-    end: str = Field(..., description="ISO 8601 datetime string")
+    at: str = Field(..., description="ISO 8601 datetime string")
 
 
 class DiaperOut(BaseModel):
     id: int
     kind: str
-    start: str
-    end: str
-    duration_minutes: int
+    at: str
 
 
 class DiaperSummaryOut(BaseModel):
     day: str
     kind: str
     count: int
-    total_minutes: int
 
 
 def init_db() -> None:
@@ -74,18 +70,18 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_feedings_start ON feedings(start)"
         )
 
+        # Point-in-time diaper events (no start/end duration)
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS diapers (
+            CREATE TABLE IF NOT EXISTS diaper_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 kind TEXT NOT NULL,
-                start TEXT NOT NULL,
-                end TEXT NOT NULL
+                at TEXT NOT NULL
             )
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_diapers_start ON diapers(start)"
+            "CREATE INDEX IF NOT EXISTS idx_diaper_events_at ON diaper_events(at)"
         )
         conn.commit()
 
@@ -229,22 +225,19 @@ def list_diapers(days: int = 7) -> List[DiaperOut]:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT id, kind, start, end FROM diapers WHERE start >= ? ORDER BY start DESC",
+            "SELECT id, kind, at FROM diaper_events WHERE at >= ? ORDER BY at DESC",
             (cutoff.isoformat(timespec="minutes"),),
         ).fetchall()
 
     items: List[DiaperOut] = []
     for r in rows:
-        start_dt = parse_dt(r["start"])
-        end_dt = parse_dt(r["end"])
-        duration = max(0, int((end_dt - start_dt).total_seconds() // 60))
+        # parse validates ISO
+        _ = parse_dt(r["at"])
         items.append(
             DiaperOut(
                 id=r["id"],
                 kind=_normalize_diaper_kind(r["kind"]),
-                start=r["start"],
-                end=r["end"],
-                duration_minutes=duration,
+                at=r["at"],
             )
         )
     return items
@@ -256,62 +249,50 @@ def diaper_summary(days: int = 7) -> List[DiaperSummaryOut]:
     with closing(sqlite3.connect(DB_PATH)) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT kind, start, end FROM diapers WHERE start >= ?",
+            "SELECT kind, at FROM diaper_events WHERE at >= ?",
             (cutoff.isoformat(),),
         ).fetchall()
 
-    buckets: dict[tuple[str, str], dict[str, int]] = {}
+    buckets: dict[tuple[str, str], int] = {}
     for r in rows:
         kind = _normalize_diaper_kind(r["kind"])
-        start_dt = parse_dt(r["start"])
-        end_dt = parse_dt(r["end"])
-        day = start_dt.date().isoformat()
-        duration = max(0, int((end_dt - start_dt).total_seconds() // 60))
+        at_dt = parse_dt(r["at"])
+        day = at_dt.date().isoformat()
         key = (day, kind)
-        if key not in buckets:
-            buckets[key] = {"count": 0, "total_minutes": 0}
-        buckets[key]["count"] += 1
-        buckets[key]["total_minutes"] += duration
+        buckets[key] = buckets.get(key, 0) + 1
 
     result: list[DiaperSummaryOut] = []
     for i in range(days):
         day = (datetime.now().date() - timedelta(days=i)).isoformat()
         for kind in ("pee", "poop"):
-            data = buckets.get((day, kind), {"count": 0, "total_minutes": 0})
-            result.append(DiaperSummaryOut(day=day, kind=kind, count=data["count"], total_minutes=data["total_minutes"]))
+            result.append(DiaperSummaryOut(day=day, kind=kind, count=buckets.get((day, kind), 0)))
     return result
 
 
 @app.post("/api/diapers", response_model=DiaperOut)
 def create_diaper(d: DiaperIn) -> DiaperOut:
     kind = _normalize_diaper_kind(d.kind)
-    start_dt = parse_dt(d.start)
-    end_dt = parse_dt(d.end)
-    if end_dt < start_dt:
-        raise HTTPException(status_code=400, detail="End time must be after start time")
+    at_dt = parse_dt(d.at)
 
     with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.execute(
-            "INSERT INTO diapers (kind, start, end) VALUES (?, ?, ?)",
-            (kind, start_dt.isoformat(timespec="minutes"), end_dt.isoformat(timespec="minutes")),
+            "INSERT INTO diaper_events (kind, at) VALUES (?, ?)",
+            (kind, at_dt.isoformat(timespec="minutes")),
         )
         conn.commit()
         diaper_id = cur.lastrowid
 
-    duration = int((end_dt - start_dt).total_seconds() // 60)
     return DiaperOut(
         id=diaper_id,
         kind=kind,
-        start=start_dt.isoformat(timespec="minutes"),
-        end=end_dt.isoformat(timespec="minutes"),
-        duration_minutes=duration,
+        at=at_dt.isoformat(timespec="minutes"),
     )
 
 
 @app.delete("/api/diapers/{diaper_id}")
 def delete_diaper(diaper_id: int) -> dict:
     with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.execute("DELETE FROM diapers WHERE id = ?", (diaper_id,))
+        cur = conn.execute("DELETE FROM diaper_events WHERE id = ?", (diaper_id,))
         conn.commit()
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Diaper event not found")

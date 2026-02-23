@@ -68,16 +68,10 @@
     </div>
     <div class="muted" style="margin-top:6px;">Selected: <strong id="kindSelected">pee</strong></div>
 
-    <label>Start</label>
+    <label>When</label>
     <div class="row">
-      <input type="datetime-local" id="dstart" />
-      <button class="secondary" onclick="setNow('dstart')">Now</button>
-    </div>
-
-    <label>End</label>
-    <div class="row">
-      <input type="datetime-local" id="dend" />
-      <button class="secondary" onclick="setNow('dend')">Now</button>
+      <input type="datetime-local" id="dat" />
+      <button class="secondary" onclick="setNow('dat')">Now</button>
     </div>
 
     <div style="margin-top:12px;">
@@ -153,26 +147,24 @@
   }
 
   async function addDiaper() {
-    const start = document.getElementById('dstart').value;
-    const end = document.getElementById('dend').value;
+    const at = document.getElementById('dat').value;
     const error = document.getElementById('derror');
     error.textContent = '';
-    if (!start || !end) {
-      error.textContent = 'Start and end are required.';
+    if (!at) {
+      error.textContent = 'Time is required.';
       return;
     }
     const res = await fetch('/api/diapers', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: diaperKind, start, end })
+      body: JSON.stringify({ kind: diaperKind, at })
     });
     if (!res.ok) {
       const data = await res.json();
       error.textContent = data.detail || 'Error saving diaper event.';
       return;
     }
-    document.getElementById('dstart').value = '';
-    document.getElementById('dend').value = '';
+    document.getElementById('dat').value = '';
     await load();
   }
 
@@ -243,8 +235,7 @@
       div.className = 'event';
       div.innerHTML = `
         <div>
-          <div><strong>${d.kind}</strong> · <strong>${new Date(d.start).toLocaleString()}</strong> → ${new Date(d.end).toLocaleString()}</div>
-          <div class="muted">Duration: ${d.duration_minutes} min</div>
+          <div><strong>${d.kind}</strong> · <strong>${new Date(d.at).toLocaleString()}</strong></div>
         </div>
         <button class="secondary" onclick="deleteDiaper(${d.id})">Delete</button>
       `;
@@ -260,14 +251,14 @@
     });
 
     Object.keys(dByDay).sort().reverse().forEach(day => {
-      const pee = dByDay[day]['pee'] || { count: 0, total_minutes: 0 };
-      const poop = dByDay[day]['poop'] || { count: 0, total_minutes: 0 };
+      const pee = dByDay[day]['pee'] || { count: 0 };
+      const poop = dByDay[day]['poop'] || { count: 0 };
       const div = document.createElement('div');
       div.className = 'card';
       div.innerHTML = `
         <div><strong>${day}</strong></div>
-        <div class="muted">Pee: ${pee.count} · ${pee.total_minutes} min</div>
-        <div class="muted">Poop: ${poop.count} · ${poop.total_minutes} min</div>
+        <div class="muted">Pee: ${pee.count}</div>
+        <div class="muted">Poop: ${poop.count}</div>
       `;
       dsummaryEl.appendChild(div);
     });
